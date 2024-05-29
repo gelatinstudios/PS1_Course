@@ -1,3 +1,5 @@
 *.bin
 *.ps-exe
 .sentry-native/
+*.exe
+*.obj
