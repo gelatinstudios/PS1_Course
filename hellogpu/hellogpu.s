@@ -196,6 +196,8 @@ DrawFlatTriangle:
         sll $t1, $t1, 16
         or  $t0, $t0, $t1
         sw  $t0, GP0($a0)
+
+        addiu $sp, $sp, (4 * 7)
         
   jr $ra                     ; Return address is stored in register $ra
   nop
