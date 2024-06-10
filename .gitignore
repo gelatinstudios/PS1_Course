@@ -5,3 +5,7 @@
 *.obj
 *.pdf
 *.png
+*.EXE
+*.cpe
+*.sym
+*.map
