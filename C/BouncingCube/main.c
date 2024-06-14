@@ -11,7 +11,7 @@
 #define SCREEN_CENTER_Y (SCREEN_RES_Y >> 1)
 #define SCREEN_Z 320
 
-#define OT_LENGTH 256
+#define OT_LENGTH 2048
 
 #define NUM_VERTICES 8
 #define NUM_FACES 6
@@ -27,16 +27,21 @@ SVECTOR vertices[] = {
     { -128,  128, -128 },
     {  128,  128, -128 },
     {  128,  128,  128 },
-    { -128,  128,  128 }
+    { -128,  128,  128 },
+};
+
+short floor[] = {
+  7, 4, 5, // bottom
+  7, 5, 6, // bottom
 };
 
 short faces[] = {
-    0, 3, 1, 2, // top
-    4, 0, 5, 1, // front
-    7, 4, 6, 5, // bottom
-    5, 1, 6, 2, // right
-    2, 3, 6, 7, // back
-    0, 4, 3, 7  // left
+    3, 2, 0, 1,  // top quad
+    0, 1, 4, 5,  // front quad
+    4, 5, 7, 6,  // bottom quad
+    1, 2, 5, 6,  // right quad
+    2, 3, 6, 7,  // back quad
+    3, 0, 7, 4,  // left quad
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -58,10 +63,18 @@ char *nextprim;              // Pointer to the next primitive in the primitive b
 POLY_G4 *poly;
 
 SVECTOR rotation = {0, 0, 0};
-VECTOR translation = {0, 0, 900};
+VECTOR translation = {0, 0, 0};
 VECTOR scale = {ONE, ONE, ONE};
 
 MATRIX world = {0};
+
+VECTOR vel = {0, 0, 0};
+VECTOR acc = {0, 0, 0};
+VECTOR pos = {0, 0, 0};
+
+SVECTOR floor_rotation = {0, 0, 0};
+VECTOR floor_pos = {0, 0, 0};
+VECTOR floor_scale = {ONE*1000, ONE, ONE*10};
 
 ///////////////////////////////////////////////////////////////////////////////
 // Initialize the display mode and setup double buffering
@@ -131,6 +144,22 @@ void Setup(void) {
 
     // Reset next primitive pointer to the start of the primitive buffer
     nextprim = primbuff[currbuff];
+
+    acc.vx = 0;
+    acc.vy = 1;
+    acc.vz = 0;
+
+    vel.vx = 0;
+    vel.vy = 0;
+    vel.vz = 0;
+
+    pos.vx = 0;
+    pos.vy = -400;
+    pos.vz = 1800;
+
+    floor_pos.vx = 0;
+    floor_pos.vy = 400;
+    floor_pos.vz = 1800;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -143,39 +172,92 @@ void Update(void) {
     // Empty the Ordering Table
     ClearOTagR(ot[currbuff], OT_LENGTH);
 
-    RotMatrix(&rotation, &world);        // Populate the world matrix with the current rotation values
-    TransMatrix(&world, &translation);   // Populate the world matrix with the current translation values
-    ScaleMatrix(&world, &scale);         // Populate the world matrix with the current scale values
+    // Update the velocity based on the acceleration
+    vel.vx += acc.vx;
+    vel.vy += acc.vy;
+    vel.vz += acc.vz;
+
+    // Update the position based on the velocity
+    pos.vx += (vel.vx >> 1);
+    pos.vy += (vel.vy >> 1);
+    pos.vz += (vel.vz >> 1);
+
+    // Bounce and flip the velocity if we reach the bottom part of the screen
+    if (pos.vy > 400) {
+        vel.vy *= -1;
+    }
+
+    RotMatrix(&floor_rotation, &world);        // Populate the world matrix with the current rotation values
+    TransMatrix(&world, &floor_pos);           // Populate the world matrix with the current translation values
+    ScaleMatrix(&world, &floor_scale);         // Populate the world matrix with the current scale values
 
     SetRotMatrix(&world);                // Sets the rotation matrix to be used by the GTE (RotTransPers)
     SetTransMatrix(&world);              // Sets the translation matrix to be used by the GTE (RotTransPers)
 
+    // Draw floor
+    for (i = 0; i < 6; i += 3) {
+        POLY_F3 *tri = (POLY_F3 *)nextprim;
+        setPolyF3(tri);
+        setRGB0(tri, 25, 25, 255);
+
+        RotTransPers3(&vertices[floor[i+0]],
+                      &vertices[floor[i+1]],
+                      &vertices[floor[i+2]],
+                      (long*)&tri->x0,
+                      (long*)&tri->x1,
+                      (long*)&tri->x2,
+                      &p, &flg);
+        
+        // Sort the quad in the OT
+        addPrim(ot[currbuff][OT_LENGTH-1], tri);
+        nextprim += sizeof(*tri);
+    }
+
+    // TODO: delete unneeded
+    RotMatrix(&rotation, &world);        // Populate the world matrix with the current rotation values
+    TransMatrix(&world, &pos);           // Populate the world matrix with the current translation values
+    ScaleMatrix(&world, &scale);         // Populate the world matrix with the current scale values
+
+    SetRotMatrix(&world);                // Sets the rotation matrix to be used by the GTE (RotTransPers)
+    SetTransMatrix(&world);              // Sets the translation matrix to be used by the GTE (RotTransPers)
+    
     // Loop all triangle faces
     for (i = 0; i < NUM_FACES * 4; i += 4) {
-        short *f = &faces[i];
         poly = (POLY_G4*) nextprim;
         setPolyG4(poly);
         setRGB0(poly, 255, 0, 255);
         setRGB1(poly, 255, 255, 0);
         setRGB2(poly, 0, 255, 255);
-        setRGB3(poly, 0, 0, 255);
+        setRGB3(poly, 0, 255, 0);
 
-    
-        nclip = RotAverageNclip4(&vertices[f[0]], &vertices[f[1]], &vertices[f[2]], &vertices[f[3]],
-                                 (long*)&poly->x0, (long*)&poly->x1, (long*)&poly->x2, (long*)&poly->x3, &p, &otz, &flg);
+        // Rotate, translate, project, average OTz, and Nclip with 4 vertices
+        nclip = RotAverageNclip4(
+            &vertices[faces[i + 0]],
+            &vertices[faces[i + 1]],
+            &vertices[faces[i + 2]],
+            &vertices[faces[i + 3]],
+            (long*)&poly->x0,
+            (long*)&poly->x1,
+            (long*)&poly->x2,
+            (long*)&poly->x3,
+            &p, &otz, &flg
+            );
+
+        // Bypass faces that are looking away from us
         if (nclip <= 0) {
             continue;
         }
 
+        // Sort the quad in the OT
         if ((otz > 0) && (otz < OT_LENGTH)) {
             addPrim(ot[currbuff][otz], poly);
             nextprim += sizeof(POLY_G4);
         }
     }
-
-    rotation.vx += rand() % 30 + 5;
-    rotation.vy += rand() % 30 + 5;
-    rotation.vz += rand() % 30 + 5;
+    
+    rotation.vx += 6;
+    rotation.vy += 8;
+    rotation.vz += 12;
 }
 
 ///////////////////////////////////////////////////////////////////////////////
